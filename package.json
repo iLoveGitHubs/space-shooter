@@ -1,0 +1,11 @@
+{
+  "name": "space-shooter",
+  "version": "1.0.0",
+  "description": "HTML5 Canvas space shooter game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["game", "canvas", "space-shooter"],
+  "license": "MIT"
+}

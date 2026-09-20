@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Space Shooter</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #000;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #gameCanvas {
+    border: 2px solid #1a1a2e;
+    box-shadow: 0 0 40px rgba(0, 150, 255, 0.15);
+    background: #000;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // ---------- Game State ----------
+  const STATE = { START: 0, PLAYING: 1, GAMEOVER: 2 };
+  let gameState = STATE.START;
+
+  let score = 0;
+  let lives = 3;
+  let level = 1;
+  let spawnTimer = 0;
+  let spawnInterval = 70; // frames between spawns
+  let asteroidSpeed = 1.5;
+
+  // ---------- Input ----------
+  const keys = {};
+  window.addEventListener('keydown', function (e) {
+    keys[e.code] = true;
+    if (e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) {
+    keys[e.code] = false;
+  });
+
+  // ---------- Player ----------
+  const player = {
+    x: W / 2,
+    y: H - 70,
+    w: 34,
+    h: 40,
+    speed: 5,
+    cooldown: 0,
+    fireRate: 12, // frames between shots
+    invuln: 0,
+    thrust: 0
+  };
+
+  // ---------- Entities ----------
+  let bullets = [];
+  let asteroids = [];
+  let particles = [];
+  let stars = [];
+
+  // ---------- Starfield ----------
+  function initStars() {
+    stars = [];
+    for (let i = 0; i < 120; i++) {
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        z: Math.random() * 2 + 0.3,
+        size: Math.random() * 1.6 + 0.3
+      });
+    }
+  }
+  initStars();
+
+  function updateStars() {
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      s.y += s.z * 1.2;
+      if (s.y > H) {
+        s.y = 0;
+        s.x = Math.random() * W;
+      }
+    }
+  }
+
+  function drawStars() {
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      const alpha = 0.3 + s.z * 0.3;
+      ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+      ctx.fillRect(s.x, s.y, s.size, s.size);
+    }
+  }
+
+  // ---------- Bullets ----------
+  function fireBullet() {
+    if (player.cooldown > 0) return;
+    bullets.push({ x: player.x, y: player.y - player.h / 2, w: 4, h: 14, speed: 9 });
+    player.cooldown = player.fireRate;
+  }
+
+  function updateBullets() {
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.y -= b.speed;
+      if (b.y + b.h < 0) bullets.splice(i, 1);
+    }
+  }
+
+  function drawBullets() {
+    ctx.fillStyle = '#ffeb3b';
+    for (let i = 0; i < bullets.length; i++) {
+      const b = bullets[i];
+      ctx.shadowColor = '#ffeb3b';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(b.x - b.w / 2, b.y, b.w, b.h);
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  // ---------- Asteroids ----------
+  // size tiers: 3 = large, 2 = medium, 1 = small
+  function spawnAsteroid() {
+    const r = Math.random();
+    let tier;
+    if (r < 0.5) tier = 3;
+    else if (r < 0.85) tier = 2;
+    else tier = 1;
+    asteroids.push(makeAsteroid(Math.random() * (W - 80) + 40, -40, tier));
+  }
+
+  function makeAsteroid(x, y, tier) {
+    const radius = tier === 3 ? 38 : tier === 2 ? 26 : 16;
+    const verts = 8 + Math.floor(Math.random() * 4);
+    const shape = [];
+    for (let i = 0; i < verts; i++) {
+      shape.push(radius * (0.75 + Math.random() * 0.5));
+    }
+    return {
+      x: x,
+      y: y,
+      tier: tier,
+      radius: radius,
+      shape: shape,
+      verts: verts,
+      rot: Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.04,
+      vx: (Math.random() - 0.5) * 1.2,
+      vy: asteroidSpeed * (0.8 + Math.random() * 0.6)
+    };
+  }
+
+  function updateAsteroids() {
+    for (let i = asteroids.length - 1; i >= 0; i--) {
+      const a = asteroids[i];
+      a.x += a.vx;
+      a.y += a.vy;
+      a.rot += a.rotSpeed;
+      if (a.x < a.radius) { a.x = a.radius; a.vx = Math.abs(a.vx); }
+      if (a.x > W - a.radius) { a.x = W - a.radius; a.vx = -Math.abs(a.vx); }
+      if (a.y - a.radius > H) asteroids.splice(i, 1);
+    }
+  }
+
+  function drawAsteroids() {
+    for (let i = 0; i < asteroids.length; i++) {
+      const a = asteroids[i];
+      ctx.save();
+      ctx.translate(a.x, a.y);
+      ctx.rotate(a.rot);
+      ctx.beginPath();
+      for (let v = 0; v < a.verts; v++) {
+        const ang = (v / a.verts) * Math.PI * 2;
+        const rad = a.shape[v];
+        const px = Math.cos(ang) * rad;
+        const py = Math.sin(ang) * rad;
+        if (v === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#4a4a5e';
+      ctx.fill();
+      ctx.strokeStyle = '#8a8aa0';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // ---------- Particles ----------
+  function spawnExplosion(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = Math.random() * 4 + 1;
+      particles.push({
+        x: x,
+        y: y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        life: 30 + Math.random() * 20,
+        maxLife: 50,
+        color: color,
+        size: Math.random() * 3 + 1
+      });
+    }
+  }
+
+  function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.96;
+      p.vy *= 0.96;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  function drawParticles() {
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- Player Drawing ----------
+  function drawPlayer() {
+    if (player.invuln > 0 && Math.floor(player.invuln / 4) % 2 === 0) return;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+
+    // Thrust flame
+    if (player.thrust > 0) {
+      ctx.beginPath();
+      ctx.moveTo(-7, player.h / 2);
+      ctx.lineTo(0, player.h / 2 + 10 + Math.random() * 8);
+      ctx.lineTo(7, player.h / 2);
+      ctx.closePath();
+      ctx.fillStyle = '#ff9800';
+      ctx.fill();
+    }
+
+    // Ship body
+    ctx.beginPath();
+    ctx.moveTo(0, -player.h / 2);
+    ctx.lineTo(-player.w / 2, player.h / 2);
+    ctx.lineTo(-player.w / 4, player.h / 3);
+    ctx.lineTo(player.w / 4, player.h / 3);
+    ctx.lineTo(player.w / 2, player.h / 2);
+    ctx.closePath();
+    ctx.fillStyle = '#2196f3';
+    ctx.fill();
+    ctx.strokeStyle = '#82c4ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Cockpit
+    ctx.beginPath();
+    ctx.arc(0, -2, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#e3f2fd';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ---------- Collision ----------
+  function circleRectCollide(cx, cy, cr, rx, ry, rw, rh) {
+    const nx = Math.max(rx - rw / 2, Math.min(cx, rx + rw / 2));
+    const ny = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - nx;
+    const dy = cy - ny;
+    return (dx * dx + dy * dy) < (cr * cr);
+  }
+
+  function checkCollisions() {
+    // bullet vs asteroid
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      for (let j = asteroids.length - 1; j >= 0; j--) {
+        const a = asteroids[j];
+        if (circleRectCollide(a.x, a.y, a.radius, b.x, b.y, b.w, b.h)) {
+          bullets.splice(i, 1);
+          asteroids.splice(j, 1);
+          spawnExplosion(a.x, a.y, '#ff9800', 18);
+          const pts = a.tier === 3 ? 20 : a.tier === 2 ? 35 : 50;
+          score += pts;
+          // split
+          if (a.tier > 1) {
+            for (let k = 0; k < 2; k++) {
+              const child = makeAsteroid(a.x, a.y, a.tier - 1);
+              child.vx = (Math.random() - 0.5) * 3;
+              child.vy = Math.abs(a.vy) * (0.9 + Math.random() * 0.4);
+              asteroids.push(child);
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // asteroid vs player
+    if (player.invuln <= 0) {
+      for (let j = asteroids.length - 1; j >= 0; j--) {
+        const a = asteroids[j];
+        if (circleRectCollide(a.x, a.y, a.radius, player.x, player.y - player.h / 2, player.w, player.h)) {
+          asteroids.splice(j, 1);
+          spawnExplosion(a.x, a.y, '#f44336', 25);
+          lives--;
+          player.invuln = 90;
+          if (lives <= 0) {
+            gameState = STATE.GAMEOVER;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // ---------- Level ----------
+  function checkLevel() {
+    const newLevel = Math.floor(score / 100) + 1;
+    if (newLevel > level) {
+      level = newLevel;
+      asteroidSpeed = 1.5 + (level - 1) * 0.5;
+      spawnInterval = Math.max(20, 70 - (level - 1) * 6);
+    }
+  }
+
+  // ---------- Update Player ----------
+  function updatePlayer() {
+    let moving = false;
+    if (keys['ArrowLeft'] || keys['KeyA']) { player.x -= player.speed; moving = true; }
+    if (keys['ArrowRight'] || keys['KeyD']) { player.x += player.speed; moving = true; }
+    if (keys['ArrowUp'] || keys['KeyW']) { player.y -= player.speed; moving = true; }
+    if (keys['ArrowDown'] || keys['KeyS']) { player.y += player.speed; moving = true; }
+    player.thrust = moving ? 1 : 0;
+
+    const halfW = player.w / 2;
+    const halfH = player.h / 2;
+    if (player.x < halfW) player.x = halfW;
+    if (player.x > W - halfW) player.x = W - halfW;
+    if (player.y < halfH) player.y = halfH;
+    if (player.y > H - halfH) player.y = H - halfH;
+
+    if (keys['Space']) fireBullet();
+    if (player.cooldown > 0) player.cooldown--;
+    if (player.invuln > 0) player.invuln--;
+  }
+
+  // ---------- UI ----------
+  function drawHUD() {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 18px Segoe UI, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Điểm: ' + score, 16, 28);
+    ctx.fillText('Level: ' + level, 16, 52);
+
+    ctx.textAlign = 'right';
+    ctx.fillText('Mạng: ' + lives, W - 16, 28);
+
+    // life icons
+    for (let i = 0; i < lives; i++) {
+      drawLifeIcon(W - 20 - i * 26, 42);
+    }
+  }
+
+  function drawLifeIcon(x, y) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(-7, 7);
+    ctx.lineTo(7, 7);
+    ctx.closePath();
+    ctx.fillStyle = '#2196f3';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStartScreen() {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = '#82c4ff';
+    ctx.font = 'bold 52px Segoe UI, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SPACE SHOOTER', W / 2, H / 2 - 80);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '18px Segoe UI, sans-serif';
+    ctx.fillText('Di chuyển: Phím mũi tên hoặc WASD', W / 2, H / 2 - 20);
+    ctx.fillText('Bắn: Phím Space', W / 2, H / 2 + 8);
+    ctx.fillText('Né thiên thạch và bắn chúng để ghi điểm!', W / 2, H / 2 + 36);
+    ctx.fillText('Cứ 100 điểm sẽ lên Level mới.', W / 2, H / 2 + 64);
+
+    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 300);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffeb3b';
+    ctx.font = 'bold 22px Segoe UI, sans-serif';
+    ctx.fillText('Nhấn SPACE để bắt đầu', W / 2, H / 2 + 120);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawGameOver() {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = '#f44336';
+    ctx.font = 'bold 48px Segoe UI, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', W / 2, H / 2 - 40);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '22px Segoe UI, sans-serif';
+    ctx.fillText('Điểm cuối: ' + score, W / 2, H / 2 + 4);
+    ctx.fillText('Level đạt được: ' + level, W / 2, H / 2 + 34);
+
+    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 300);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffeb3b';
+    ctx.font = 'bold 20px Segoe UI, sans-serif';
+    ctx.fillText('Nhấn R hoặc SPACE để chơi lại', W / 2, H / 2 + 90);
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- Reset ----------
+  function resetGame() {
+    score = 0;
+    lives = 3;
+    level = 1;
+    spawnTimer = 0;
+    spawnInterval = 70;
+    asteroidSpeed = 1.5;
+    bullets = [];
+    asteroids = [];
+    particles = [];
+    player.x = W / 2;
+    player.y = H - 70;
+    player.cooldown = 0;
+    player.invuln = 0;
+  }
+
+  // ---------- Main Loop ----------
+  function update() {
+    updateStars();
+
+    if (gameState === STATE.PLAYING) {
+      updatePlayer();
+      updateBullets();
+      updateAsteroids();
+      updateParticles();
+      checkCollisions();
+      checkLevel();
+
+      spawnTimer++;
+      if (spawnTimer >= spawnInterval) {
+        spawnTimer = 0;
+        spawnAsteroid();
+      }
+    } else if (gameState === STATE.GAMEOVER) {
+      updateParticles();
+      if (keys['KeyR'] || keys['Space']) {
+        resetGame();
+        gameState = STATE.PLAYING;
+        keys['Space'] = false;
+        keys['KeyR'] = false;
+      }
+    } else if (gameState === STATE.START) {
+      if (keys['Space']) {
+        resetGame();
+        gameState = STATE.PLAYING;
+        keys['Space'] = false;
+      }
+    }
+  }
+
+  function render() {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+    drawStars();
+
+    if (gameState === STATE.PLAYING || gameState === STATE.GAMEOVER) {
+      drawAsteroids();
+      drawBullets();
+      drawPlayer();
+      drawParticles();
+      drawHUD();
+    }
+
+    if (gameState === STATE.START) drawStartScreen();
+    if (gameState === STATE.GAMEOVER) drawGameOver();
+  }
+
+  function loop() {
+    update();
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+})();
+</script>
+</body>
+</html>
